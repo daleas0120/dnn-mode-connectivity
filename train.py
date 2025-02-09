@@ -74,6 +74,11 @@ torch.backends.cudnn.benchmark = True
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 
+if torch.cuda.is_available():
+    device = 'cuda'
+else:
+    device = 'cpu'
+
 loaders, num_classes = data.loaders(
     args.dataset,
     args.data_path,
@@ -111,8 +116,8 @@ else:
         if args.init_linear:
             print('Linear initialization.')
             model.init_linear()
-model.cuda()
-
+# model.cuda()
+model.to(device)
 
 def learning_rate_schedule(base_lr, epoch, total_epochs):
     alpha = epoch / total_epochs

@@ -5,6 +5,11 @@ import torch.nn.functional as F
 
 import curves
 
+if torch.cuda.is_available():
+    device = 'cuda'
+else:
+    device = 'cpu'
+
 
 def l2_regularizer(weight_decay):
     def regularizer(model):
@@ -16,8 +21,8 @@ def l2_regularizer(weight_decay):
 
 
 def cyclic_learning_rate(epoch, cycle, alpha_1, alpha_2):
-    def schedule(iter):
-        t = ((epoch % cycle) + iter) / cycle
+    def schedule(i):
+        t = ((epoch % cycle) + i) / cycle
         if t < 0.5:
             return alpha_1 * (1.0 - 2.0 * t) + alpha_2 * 2.0 * t
         else:
@@ -46,23 +51,34 @@ def train(train_loader, model, optimizer, criterion, regularizer=None, lr_schedu
 
     num_iters = len(train_loader)
     model.train()
-    for iter, (input, target) in enumerate(train_loader):
+    for i, (sample_input, target) in enumerate(train_loader):
         if lr_schedule is not None:
-            lr = lr_schedule(iter / num_iters)
+            lr = lr_schedule(i / num_iters)
             adjust_learning_rate(optimizer, lr)
-        input = input.cuda(async=True)
-        target = target.cuda(async=True)
+        # sample_input = sample_input.cuda(async=True)
+        # target = target.cuda(async=True)
+        
+        device = next(model.parameters()).device
+        print(device)
 
-        output = model(input)
+        sample_input.to(device)
+        target.to(device)
+
+        print(sample_input.dtype)
+        print(target.dtype)
+
+        optimizer.zero_grad()
+        output = model(sample_input)
+        
         loss = criterion(output, target)
         if regularizer is not None:
             loss += regularizer(model)
 
-        optimizer.zero_grad()
+        # optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        loss_sum += loss.item() * input.size(0)
+        loss_sum += loss.item() * sample_input.size(0)
         pred = output.data.argmax(1, keepdim=True)
         correct += pred.eq(target.data.view_as(pred)).sum().item()
 
@@ -72,25 +88,71 @@ def train(train_loader, model, optimizer, criterion, regularizer=None, lr_schedu
     }
 
 
+def new_train(train_loader, model, optimizer, criterion, regularizer=None, lr_schedule=None):
+    loss_sum = 0.0
+    correct = 0.0
+    device = next(model.parameters()).device
+
+    num_iters = len(train_loader)
+    model.train()
+    for i, data in enumerate(train_loader, 0):
+
+        inputs, labels = data
+
+        optimizer.zero_grad()
+
+        if lr_schedule is not None:
+            lr = lr_schedule(i / num_iters)
+            adjust_learning_rate(optimizer, lr)
+
+        outputs = model(inputs.to(device))
+
+        loss = criterion(outputs, labels.to(device))
+
+        if regularizer is not None:
+            loss += regularizer(model)
+
+        # optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        loss_sum += loss.item() * len(labels)
+        pred = outputs.data.argmax(1, keepdim=True)
+        correct += pred.eq(labels.to(device).data.view_as(pred)).sum().item()
+
+
+    return {
+        'loss': loss_sum / len(train_loader.dataset),
+        'accuracy': correct * 100.0 / len(train_loader.dataset),
+    }
+
+
+
+
+
 def test(test_loader, model, criterion, regularizer=None, **kwargs):
     loss_sum = 0.0
     nll_sum = 0.0
     correct = 0.0
 
     model.eval()
+    device = next(model.parameters()).device
 
-    for input, target in test_loader:
-        input = input.cuda(async=True)
-        target = target.cuda(async=True)
+    for sample_input, target in test_loader:
+        # sample_input = sample_input.cuda(async=True)
+        # target = target.cuda(async=True)
 
-        output = model(input, **kwargs)
+        sample_input.to(device)
+        target.to(device)
+
+        output = model(sample_input, **kwargs)
         nll = criterion(output, target)
         loss = nll.clone()
         if regularizer is not None:
             loss += regularizer(model)
 
-        nll_sum += nll.item() * input.size(0)
-        loss_sum += loss.item() * input.size(0)
+        nll_sum += nll.item() * sample_input.size(0)
+        loss_sum += loss.item() * sample_input.size(0)
         pred = output.data.argmax(1, keepdim=True)
         correct += pred.eq(target.data.view_as(pred)).sum().item()
 
@@ -102,13 +164,51 @@ def test(test_loader, model, criterion, regularizer=None, **kwargs):
 
 
 
+def new_test(test_loader, model, criterion, regularizer=None, **kwargs):
+    loss_sum = 0.0
+    nll_sum = 0.0
+    correct = 0.0
+
+    model.eval()
+    device = next(model.parameters()).device
+
+    for batch in test_loader:
+        sample_input = batch[0].to(device)
+        target = batch[1].to(device)
+
+        output = model(sample_input, **kwargs)
+        nll = criterion(output, target)
+        loss = nll.clone()
+        if regularizer is not None:
+            loss += regularizer(model)
+
+        nll_sum += nll.item() * sample_input.size(0)
+        loss_sum += loss.item() * sample_input.size(0)
+        pred = output.data.argmax(1, keepdim=True)
+        correct += pred.eq(target.data.view_as(pred)).sum().item()
+
+    return {
+        'nll': nll_sum / len(test_loader.dataset),
+        'loss': loss_sum / len(test_loader.dataset),
+        'accuracy': correct * 100.0 / len(test_loader.dataset),
+    }
+
+
+
+
 def predictions(test_loader, model, **kwargs):
     model.eval()
     preds = []
     targets = []
-    for input, target in test_loader:
-        input = input.cuda(async=True)
-        output = model(input, **kwargs)
+    for sample_input, target in test_loader:
+
+        device = next(model.parameters()).device
+
+        sample_input.to(device)
+        target.to(device)
+
+        # sample_input = sample_input.cuda(async=True)
+        # output = model(sample_input, **kwargs)
         probs = F.softmax(output, dim=1)
         preds.append(probs.cpu().data.numpy())
         targets.append(target.numpy())
@@ -154,15 +254,18 @@ def update_bn(loader, model, **kwargs):
     model.apply(reset_bn)
     model.apply(lambda module: _get_momenta(module, momenta))
     num_samples = 0
-    for input, _ in loader:
-        input = input.cuda(async=True)
-        batch_size = input.data.size(0)
+    for sample_input, _ in loader:
+        device = next(model.parameters()).device
+        sample_input.to(device)
+
+        # sample_input = sample_input.cuda(async=True)
+        batch_size = sample_input.data.size(0)
 
         momentum = batch_size / (num_samples + batch_size)
         for module in momenta.keys():
             module.momentum = momentum
 
-        model(input, **kwargs)
+        model(sample_input, **kwargs)
         num_samples += batch_size
 
     model.apply(lambda module: _set_momenta(module, momenta))

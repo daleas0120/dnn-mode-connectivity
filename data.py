@@ -76,4 +76,4 @@ def loaders(dataset, path, batch_size, num_workers, transform_name, use_test=Fal
                    num_workers=num_workers,
                    pin_memory=True
                ),
-           }, max(train_set.train_labels) + 1
+           }, 11 #max(train_set.train_labels) + 1
